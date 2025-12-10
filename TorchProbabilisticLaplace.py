@@ -606,9 +606,6 @@ if __name__ == "__main__":
     #   Load a Model -- currently: load the one that was trained above!
     model_load = load_model_state(TorchNet, filepath="output/net_adam_mini_batch.pth", stepsize=forward.stepsize_h, width=20, depth=2)
 
-    # diss data load
-    #model_load = load_model_state(TorchNet, filepath="diss_used/output_torch_final_continued/sinnet_adam_new_patth.pth", stepsize=forward.stepsize_h, width=20, depth=2)    # -- for diss XXX
-
     # -------------------------------------------------
     #   Evaluate and Plot
     #
@@ -684,5 +681,3 @@ if __name__ == "__main__":
     model_path_vals_list = [2 * model_load(path) for path in paths]     #   *2 as above
     exact_path_vals_list = [forward.exact_solution(path) for path in paths]
     plot_timelines(model_vals=model_path_vals_list, vals_exact=exact_path_vals_list, stepsize=forward.stepsize_h, save_as='output/load_timelines')
-
-    # plot_history(filename="diss_used/output_torch_final/history.txt", save_as="output/loss_history") -- XXX for diss !!
