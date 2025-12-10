@@ -1,0 +1,11 @@
+# Ignore python cache files
+__pycache__/
+*.pyc
+*.pyo
+
+# Ignore output
+*.png
+*.pth
+*.pt
+
+diss_used/

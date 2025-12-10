@@ -276,15 +276,18 @@ def train_model_bfgs(model, padded, mask, exit_points_M=None, exact_exits_M=None
     return model
 """
 
+
 # -------------------------------------------------
 def save_model_state(model, filepath):
     torch.save(model.state_dict(), filepath)
     pass
 
+
 def load_model_state(model_class, filepath, **model_kwargs):
     model = model_class(**model_kwargs)
     model.load_state_dict(torch.load(filepath))
     return model
+
 
 def save_train_vals(iter, *values, filename="history.txt"):
     mode = "w" if iter == 0 else "a"
@@ -412,7 +415,7 @@ def to_numpy(t):
     return t.numpy()
 
 
-def plot_model(coords, vals=None, save_as="test_plot", figsize=(6, 6), cmap="coolwarm", title="Plot", vals_label="u(x,y)", iter=0, no_forward_exit=False):
+def plot_model(coords, vals=None, save_as="test_plot", figsize=(6, 6), cmap="coolwarm", relative_plot=False, title="Plot", vals_label="u(x,y)", iter=0, no_forward_exit=False):
     fig, ax = plt.subplots()
     if vals is not None:
         x = to_numpy(coords[:, 0])
@@ -421,7 +424,12 @@ def plot_model(coords, vals=None, save_as="test_plot", figsize=(6, 6), cmap="coo
 
         c_max = torch.max(vals).cpu().detach().numpy()
         c_min = torch.min(vals).cpu().detach().numpy()
-        norm = mpl.colors.Normalize(vmin=c_min, vmax=c_max)
+
+        if relative_plot:
+            #cmap = 'viridis'
+            norm = mpl.colors.LogNorm(vmin=max(c_min, 1e-10), vmax=c_max)
+        else:
+            norm = mpl.colors.Normalize(vmin=c_min, vmax=c_max)
 
         scatter = plt.scatter(x, y, c=c, cmap=cmap, norm=norm, s=5, alpha=0.7)
         if vals_label is not None:
@@ -454,7 +462,7 @@ def plot_model(coords, vals=None, save_as="test_plot", figsize=(6, 6), cmap="coo
     pass
 
 
-def plot_timelines(path_vals_list, vals_exact=None, save_as="timelines", stepsize=0.01):
+def plot_timelines(model_vals, vals_exact=None, save_as="timelines", stepsize=0.01):
     plt.figure()
     colors = ["tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple"]
     light_colors = [
@@ -465,14 +473,14 @@ def plot_timelines(path_vals_list, vals_exact=None, save_as="timelines", stepsiz
         "#d4b4e8",  # light purple
     ]
 
-    for i, vals in enumerate(path_vals_list):
+    for i, vals in enumerate(model_vals):
         c = to_numpy(vals)
-        plt.plot(c, color=colors[i], label="exact" if i == 0 else None, linewidth=0.8)
+        plt.plot(c, color=colors[i], label="model" if i == 0 else None, linewidth=0.8)
 
     if vals_exact is not None:
         for i, vals in enumerate(vals_exact):
             c = to_numpy(vals)
-            plt.plot(c, color=light_colors[i], label="model" if i == 0 else None, linestyle='--', linewidth=0.8)
+            plt.plot(c, color=light_colors[i], label="exact" if i == 0 else None, linestyle='--', linewidth=0.8)
 
     ax = plt.gca()
     ticks = ax.get_xticks()
@@ -549,13 +557,13 @@ def pad_forward_paths(torch_paths, forward):
 
 
 class ForwardProcess:
-    def __init__(self, stepsize_h=0.01):
+    def __init__(self, stepsize_h=0.01, batch_size=100):
         self.stepsize_h = stepsize_h
 
         #self.new_batch = -7 # TrueFalse    # TODO - mmake active class attribute
         self.new_batch_iter = 500
 
-        self.batch_size = 100 #450 # batch_size -- number of paths for interior
+        self.batch_size = batch_size  # 100 #450 # batch_size -- number of paths for interior
 
         self.samples_boundary = 10  # batch_size -- number of additional exit point via Euler Maruyama
         self.samples_boundary_exact = self.batch_size * 200 // 2  # exact exit points -- !! this is just init !! -- gets set in pad_forward_paths depending on the sampled trajectories
@@ -573,40 +581,15 @@ class ForwardProcess:
 
     def exact_solution(self, points):
         c1, c2 = self.center
-        vals = self.f * (self.radius**2 - (points[:,0] - c1)**2 - (points[:,1] - c2)**2) / 2
+        vals = self.f * (self.radius**2 - (points[:,0] - c1)**2 - (points[:,1] - c2)**2)  # / 2  # MW here we solve the laplace equation. To avoid scaling of Brownian motion. Torch approximates 'PDE *1/2'
         return vals
 
 
 if __name__ == "__main__":
 
     forward = ForwardProcess()
-
-    # generate validation data
-    val_trajectories, val_exits = simulate_brownian_exit(forward.batch_size, 10, forward.stepsize_h, forward.radius, forward.center)
-    val_padded, val_mask = pad_forward_paths(val_trajectories, forward)
-
-    print(f"[Validation Data 1] |  Batch Size: {forward.batch_size}   |   Steps Total: {forward.num_true}, Mean: {forward.mean_steps}, Max: {forward.max_steps}, Interior: {forward.num_interior}  |  Exact Boundary Points: {forward.samples_boundary_exact}")
-
-    val_exact_exits = simulate_uniform_exit_points(50, forward.radius, forward.center)
-
-    # test plot -- exact solution
-    interior_unstructured_coords = format_samples(val_trajectories, cut_forward_exit=True)
-    exact_unstructured_coords = format_samples(val_exact_exits)
-
-    plot_unstructured_coords = torch.cat([interior_unstructured_coords, exact_unstructured_coords], dim=0)
-    plot_unstructured_coords = plot_unstructured_coords.clone().detach().requires_grad_(True)
-
-    exact_vals = forward.exact_solution(plot_unstructured_coords).reshape(-1)
-    exact_grads = gradients(exact_vals, plot_unstructured_coords)
-    exact_grad_norms = torch.norm(exact_grads, dim=-1)
-
-    plot_model(coords=plot_unstructured_coords, vals=exact_vals, save_as='output/exact_solution')
-    plot_model(coords=plot_unstructured_coords, vals=exact_grad_norms, save_as='output/exact_solution_grads')
-
-    #
-    #
-    #   init model
     model = TorchNet(in_dim=2, stepsize=forward.stepsize_h, width=20, depth=2)
+
     train = False
     if train:
         print('Start Training')
@@ -619,53 +602,87 @@ if __name__ == "__main__":
     else:
         print('No training; just evaluation.')
 
-
-    # load a model -- currently: load the one that was trained above!
+    # -------------------------------------------------
+    #   Load a Model -- currently: load the one that was trained above!
     # model_load = load_model_state(TorchNet, filepath="output/net_adam_mini_batch.pth", stepsize=forward.stepsize_h, width=20, depth=2)
 
     # diss data load
     model_load = load_model_state(TorchNet, filepath="diss_used/output_torch_final_continued/sinnet_adam_new_patth.pth", stepsize=forward.stepsize_h, width=20, depth=2)    # XXX
 
-    model_vals = model_load(plot_unstructured_coords).reshape(-1)
-    model_grads = gradients(model_vals, plot_unstructured_coords)
-    model_grad_norms = torch.norm(model_grads, dim=-1)
+    # -------------------------------------------------
+    #   Evaluate and Plot
+    #
+    #   1   |   plot model for exemplary training batch
+    #
+    val_trajectories, _ = simulate_brownian_exit(forward.batch_size, 0, forward.stepsize_h, forward.radius, forward.center)
+    val_padded, val_mask = pad_forward_paths(val_trajectories, forward)
+    print(f"[Validation Data 1] |  Batch Size: {forward.batch_size}   |   Steps Total: {forward.num_true}, Mean: {forward.mean_steps}, Max: {forward.max_steps}, Interior: {forward.num_interior}  |  Exact Boundary Points: {forward.samples_boundary_exact}")
+    val_exact_exits = simulate_uniform_exit_points(forward.samples_boundary_exact, forward.radius, forward.center)
 
-    difference_vals = torch.abs(model_vals - exact_vals)
-    difference_grads = model_grads - exact_grads
-    difference_grads_norms = torch.norm(difference_grads, dim=-1)
+    # format samples -- point cloud; no path structure
+    interior_unstructured_coords = format_samples(val_trajectories, cut_forward_exit=True)
+    exact_unstructured_coords = format_samples(val_exact_exits)
+    unstructured_coords = torch.cat([interior_unstructured_coords, exact_unstructured_coords], dim=0)
+    unstructured_coords = unstructured_coords.clone().detach().requires_grad_(True)
 
-    plot_model(coords=plot_unstructured_coords, vals=model_grad_norms, save_as='output/load_trained_model_grads')
-    plot_model(coords=plot_unstructured_coords, vals=difference_vals, save_as='output/load_difference', title=None, vals_label=None)
-    plot_model(coords=plot_unstructured_coords, vals=difference_grads_norms, save_as='output/load_difference_grads', title=None, vals_label=None)
+    # eval model -- scaling because we learned u/2
+    model_vals = 2.0 * model_load(unstructured_coords).reshape(-1)
+    plot_model(coords=unstructured_coords, vals=model_vals, save_as='output/load_trained_model', title=None, vals_label=None)
 
-
-    # New samples
-    forward = ForwardProcess(stepsize_h=0.001)
+    #
+    #   2   |   plot difference to exact solution on domain - fine batch
+    #
+    stepsize_fine = 0.0005
+    batch_size_fine = 100
+    forward = ForwardProcess(stepsize_h=stepsize_fine, batch_size=batch_size_fine)
 
     # generate validation data
-    val_trajectories, val_exits = simulate_brownian_exit(forward.batch_size, 10, forward.stepsize_h,
-                                                         forward.radius, forward.center)
-
+    val_trajectories, _ = simulate_brownian_exit(forward.batch_size, 10, forward.stepsize_h, forward.radius, forward.center)
     val_padded, val_mask = pad_forward_paths(val_trajectories, forward)
     print(f"[Validation Data 2] |  Batch Size: {forward.batch_size}   |   Steps Total: {forward.num_true}, Mean: {forward.mean_steps}, Max: {forward.max_steps}, Interior: {forward.num_interior}  |  Exact Boundary Points: {forward.samples_boundary_exact}")
     val_exact_exits = simulate_uniform_exit_points(forward.samples_boundary_exact, forward.radius, forward.center)
 
-    # test plot -- exact solution
     interior_unstructured_coords = format_samples(val_trajectories, cut_forward_exit=True)
     exact_unstructured_coords = format_samples(val_exact_exits)
+    unstructured_coords = torch.cat([interior_unstructured_coords, exact_unstructured_coords], dim=0)
+    unstructured_coords = unstructured_coords.clone().detach().requires_grad_(True)
 
-    plot_unstructured_coords = torch.cat([interior_unstructured_coords, exact_unstructured_coords], dim=0)
-    plot_unstructured_coords = plot_unstructured_coords.clone().detach().requires_grad_(True)
-
-    model_vals = model_load(plot_unstructured_coords).reshape(-1)
-    model_grads = gradients(model_vals, plot_unstructured_coords)
+    # eval exact solution
+    exact_vals = forward.exact_solution(unstructured_coords).reshape(-1)
+    exact_grads = gradients(exact_vals, unstructured_coords)
+    exact_grad_norms = torch.norm(exact_grads, dim=-1)
+    # eval model
+    model_vals = 2.0 * model_load(unstructured_coords).reshape(-1)
+    model_grads = gradients(model_vals, unstructured_coords)
     model_grad_norms = torch.norm(model_grads, dim=-1)
+    # compute differences
+    difference_vals = torch.abs(model_vals - exact_vals)    # absolute error
+    difference_grads = model_grads - exact_grads
+    difference_grads_norms = torch.norm(difference_grads, dim=-1)
 
-    plot_model(coords=plot_unstructured_coords, vals=model_vals, save_as='output/load_trained_model', title=None, vals_label=None)
+    plot_model(coords=unstructured_coords, vals=exact_vals, save_as='output/exact_solution')
+    plot_model(coords=unstructured_coords, vals=exact_grad_norms, save_as='output/exact_solution_grads')
 
+    plot_model(coords=unstructured_coords, vals=model_grad_norms, save_as='output/load_trained_model_grads')
+
+    # plot absolute errors
+    plot_model(coords=unstructured_coords, vals=difference_vals, save_as='output/load_difference', title=None, vals_label=None)
+    plot_model(coords=unstructured_coords, vals=difference_grads_norms, save_as='output/load_difference_grads', title=None, vals_label=None)
+
+    # compute relative error for gradients
+    difference_grads_norms_relative = difference_grads_norms / exact_grad_norms  # consider all values --> leads to division by zero
+    diff_mask = torch.isfinite(difference_grads_norms_relative)
+
+    plot_model(coords=unstructured_coords[diff_mask], vals=difference_grads_norms_relative[diff_mask], relative_plot=True, save_as='output/error_grads_relative', title=None, vals_label=None)
+
+    #
+    #   3   |   plot trajectories - fine batch
+    #
     paths = val_trajectories[0:3]
     plot_model(paths, save_as='output/load_timelines_paths', title=None, vals_label=None)
 
-    model_path_vals_list = [model_load(path) for path in paths]
+    model_path_vals_list = [2 * model_load(path) for path in paths] #   +2 as above
     exact_path_vals_list = [forward.exact_solution(path) for path in paths]
-    plot_timelines(path_vals_list=model_path_vals_list, vals_exact=exact_path_vals_list, stepsize=forward.stepsize_h, save_as='output/load_timelines')
+    plot_timelines(model_vals=model_path_vals_list, vals_exact=exact_path_vals_list, stepsize=forward.stepsize_h, save_as='output/load_timelines')
+
+    plot_history(filename="diss_used/output_torch_final/history.txt", save_as="output/loss_history")
