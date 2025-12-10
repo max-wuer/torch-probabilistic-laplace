@@ -9,9 +9,9 @@ import torch.optim as optim
 #
 from torch_utils import gradients, laplace, hessian_vector_product
 #
-import matplotlib
+import matplotlib as mpl
 import matplotlib.pyplot as plt
-matplotlib.use('TkAgg')
+mpl.use('TkAgg')
 
 
 def simulate_brownian_exit(N=10, M=0, dt=1e-3, radius=0.5, center=(0.5, 0.5), additional_exits=False):
@@ -96,7 +96,7 @@ class TorchNet(nn.Module):
 
 
 # -------------------------------------------------
-#   Loss functional - boundary | dynamical = Taylor-type probabilistic | PINN
+#   Loss functional - boundary | dynamical (= Taylor-type probabilistic) | PINN
 # -------------------------------------------------
 def boundary_loss(model, exit_points_M):
     u_exit = model(exit_points_M).reshape(-1)
@@ -172,7 +172,7 @@ def pinn_loss(model, padded, mask):
     return L_exit + L_interior
 
 
-def train_adam(model, forward, lr_adam=1e-3, epochs_adam=[1000], new_batch=False):
+def train_adam(model, forward, lr_adam=1e-3, epochs_adam=[1000], new_batch=False, save_training_weights=False, plot_training=False):
 
     optimizer = optim.Adam(model.parameters(), lr=lr_adam)
     # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=100, min_lr=1e-5)
@@ -186,12 +186,10 @@ def train_adam(model, forward, lr_adam=1e-3, epochs_adam=[1000], new_batch=False
 
     total_epochs = sum(epochs_adam)
     epoch_counter = 0
-    for num_epochs_adam in epochs_adam:
-        # constant learning rate decay outer loop
+    for num_epochs_adam in epochs_adam: # constant learning rate decay outer loop
         for epoch in range(num_epochs_adam):
 
             if new_batch and (epoch_counter+(epoch+1)) % forward.new_batch_iter == 0:
-                #print(f"[Data Update] -- New Forward Path Batch -- after {forward.new_sample} iterations")
                 trajectories, exits = simulate_brownian_exit(forward.batch_size, forward.samples_boundary,
                                                              forward.stepsize_h, forward.radius, forward.center)
                 padded, mask = pad_forward_paths(trajectories, forward)
@@ -200,7 +198,6 @@ def train_adam(model, forward, lr_adam=1e-3, epochs_adam=[1000], new_batch=False
             optimizer.zero_grad()
 
             loss_b_exact =  boundary_loss(model, exact_exits) # *4
-            #loss_d = dynamical_loss_loop(model, padded, mask, chunk_size=chunk_size)
             loss_d = dynamical_loss(model, padded, mask)
 
             loss = (forward.samples_boundary_exact * loss_b_exact + forward.num_interior * loss_d ) / (forward.samples_boundary_exact + forward.num_interior)
@@ -210,25 +207,22 @@ def train_adam(model, forward, lr_adam=1e-3, epochs_adam=[1000], new_batch=False
             # todo this should be computed with validation batch
             #scheduler.step(loss)
 
-            # XXX # Order for train history
             save_train_vals(epoch_counter+epoch, loss.item(), filename="output/history.txt")
 
             if (epoch+1) % 1000 == 0:
                 current_lr = optimizer.param_groups[0]['lr']
                 print(f"[Adam] {epoch_counter+epoch+1}/{total_epochs}  |  Loss: {loss.item():.8f}  |  LR: {current_lr:.1e}  |  Batch Size: {forward.batch_size}   |   Steps Total: {forward.num_true}, Mean: {forward.mean_steps}, Max: {forward.max_steps}, Interior: {forward.num_interior}  |  Exact Boundary Points: {forward.samples_boundary_exact}")
-            if (epoch+1) % 500 == 0:
+            if save_training_weights and (epoch+1) % 500 == 0:
                 current_lr = optimizer.param_groups[0]['lr']
                 save_model_state(model, "output/training_weights/adam_new_%d_lr_%f.pth" % (epoch+1, current_lr))
-            if epoch % 1000 == 0:
+            if plot_training and epoch % 1000 == 0:
                 current_lr = optimizer.param_groups[0]['lr']
                 plot_model_variable_paths(model, trajectories, exits_exact=exact_exits, title="Model trainings iteration %d_lr_%e" % (epoch_counter+epoch, current_lr), iter=epoch_counter+epoch)
                 plot_model_variable_paths(model, trajectories, exits_exact=exact_exits, title="Exact_Exit_Model trainings iteration %d_lr_%e" % (epoch_counter+epoch, current_lr), iter=epoch_counter+epoch, no_forward_exit=True)
 
                 model_path_vals_list = [model(path) for path in trajectories[0:5]]
                 exact_path_vals_list = [forward.exact_solution(path) for path in trajectories[0:5]]
-                plot_timelines(path_vals_list=model_path_vals_list, vals_exact=exact_path_vals_list,
-                               stepsize=forward.stepsize_h,
-                               save_as='output/plots/timelines_%d_lr' % (epoch_counter+epoch))
+                plot_timelines(path_vals_list=model_path_vals_list, vals_exact=exact_path_vals_list, stepsize=forward.stepsize_h, save_as='output/plots/timelines_%d_lr' % (epoch_counter+epoch))
 
             tol = 1e-6
             if loss.item() < tol:
@@ -238,10 +232,6 @@ def train_adam(model, forward, lr_adam=1e-3, epochs_adam=[1000], new_batch=False
         epoch_counter += num_epochs_adam
         print("[LR Update]")
         optimizer.param_groups[0]['lr'] *= 0.1
-
-        if False:   # optimizer.param_groups[0]['lr'] == 1e-5:
-            print('hard coded batchsize update!')
-            forward.batch_size = 250
 
     plot_history(filename="output/history.txt", save_as="output/loss_history")
     return model
@@ -286,7 +276,28 @@ def train_model_bfgs(model, padded, mask, exit_points_M=None, exact_exits_M=None
     return model
 """
 
-import matplotlib as mpl
+# -------------------------------------------------
+def save_model_state(model, filepath):
+    torch.save(model.state_dict(), filepath)
+    pass
+
+def load_model_state(model_class, filepath, **model_kwargs):
+    model = model_class(**model_kwargs)
+    model.load_state_dict(torch.load(filepath))
+    return model
+
+def save_train_vals(iter, *values, filename="history.txt"):
+    mode = "w" if iter == 0 else "a"
+    line = ";".join(str(v) for v in values)
+    with open(filename, mode) as f:
+        f.write(line + "\n")
+    pass
+# -------------------------------------------------
+
+
+# -------------------------------------------------
+#   plotting
+#   old plotting method  called during training - not active at the moment. might need debugging
 def plot_model_variable_paths(model, paths, exits=None, exits_exact=None, title="Model Output Scatterplot", figsize=(6, 6), cmap="viridis", iter=0, no_forward_exit=False):
     """
     paths : list von Pfaden, jeder Pfad (K_i,2), kann Tensor oder Liste sein
@@ -294,7 +305,6 @@ def plot_model_variable_paths(model, paths, exits=None, exits_exact=None, title=
 
     Plottet alle Punkte in einem Scatterplot, Farbe nach Model-Output
     """
-
 
     c_min, c_max = 0.0, 0.0
 
@@ -376,35 +386,24 @@ def plot_model_variable_paths(model, paths, exits=None, exits_exact=None, title=
     plt.close()
     pass
 
-# forward method ? eher plot
-def format_samples(paths, cut_forward_exit=False):
-    """
-    :param
-        paths: batch of trajectories (different length / just exit points)
-        cut_forward_exit:
-    :return: single 2d point tensor
-    """
-    dimensions = paths[0].shape[0]
 
+def format_samples(paths, cut_forward_exit=False):
+    dimensions = paths[0].shape[0]
     coords_list = []
     for path in paths:
-
         if isinstance(path, torch.Tensor):
-            # include option for detach if never grad will be needed
-            #path_tensor = path.clone().detach().float()
             path_tensor = path.clone().float()
         else:
             path_tensor = torch.tensor(path, dtype=torch.float32)
-
         if cut_forward_exit:
             coords_list.append(path_tensor[: -1, :])
         else:
             coords_list.append(path_tensor)
-    # format output: ">2" there are trajectories of different lengths --> cat
     if dimensions > 2:
         return torch.cat(coords_list, dim=0)
     else:
         return torch.stack(coords_list, dim=0)
+
 
 def to_numpy(t):
     t = t.cpu()
@@ -412,8 +411,8 @@ def to_numpy(t):
         t = t.detach()
     return t.numpy()
 
-def plot_model(coords, vals=None, title="Plot", save_as="test_plot", figsize=(6, 6), cmap="viridis", vals_label="u(x,y)", iter=0, no_forward_exit=False):
-    # fig, ax = plt.subplots(figsize=figsize) # -- to force quadratic plot
+
+def plot_model(coords, vals=None, save_as="test_plot", figsize=(6, 6), cmap="coolwarm", title="Plot", vals_label="u(x,y)", iter=0, no_forward_exit=False):
     fig, ax = plt.subplots()
     if vals is not None:
         x = to_numpy(coords[:, 0])
@@ -431,29 +430,15 @@ def plot_model(coords, vals=None, title="Plot", save_as="test_plot", figsize=(6,
             plt.colorbar(scatter)
     else:
         # plot trajectories
-        colors = [
-            "tab:blue",
-            "tab:orange",
-            "tab:green",
-            "tab:red",
-            "tab:purple",
-        ]
+        colors = ["tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple"]
         for i, path in enumerate(coords):
             x = to_numpy(path[:, 0])
             y = to_numpy(path[:, 1])
 
             plt.scatter(x, y, color=colors[i], s=15, alpha=1.0)
             plt.plot(x, y, color=colors[i], linewidth=1.0, alpha=0.9)
-
-        # create the circle
-        circle = matplotlib.patches.Circle(
-            (0.5,0.5), 0.5,
-            facecolor='lightgray',
-            edgecolor=None,
-            linewidth=0,
-            zorder=0
-        )
-
+        # create circle
+        circle = mpl.patches.Circle((0.5, 0.5), 0.5, facecolor='lightgray', edgecolor=None, linewidth=0, zorder=0)
         ax.add_patch(circle)
 
     if vals_label is not None:
@@ -468,16 +453,10 @@ def plot_model(coords, vals=None, title="Plot", save_as="test_plot", figsize=(6,
     plt.close()
     pass
 
-def plot_timelines(path_vals_list, vals_exact=None, save_as="timelines", stepsize=0.01):
 
+def plot_timelines(path_vals_list, vals_exact=None, save_as="timelines", stepsize=0.01):
     plt.figure()
-    colors = [
-        "tab:blue",
-        "tab:orange",
-        "tab:green",
-        "tab:red",
-        "tab:purple",
-    ]
+    colors = ["tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple"]
     light_colors = [
         "#92c5de",  # light blue
         "#fbb77f",  # light orange
@@ -504,7 +483,8 @@ def plot_timelines(path_vals_list, vals_exact=None, save_as="timelines", stepsiz
     plt.axhline(y=0.0, linestyle='--', color='lightgrey', linewidth=0.8, zorder=0)
 
     plt.xlim(0, None)
-    plt.xlabel("t")
+    plt.tight_layout()
+    # plt.xlabel("t")
     plt.legend()
     plt.savefig(save_as)
     plt.close()
@@ -512,10 +492,6 @@ def plot_timelines(path_vals_list, vals_exact=None, save_as="timelines", stepsiz
 
 
 def plot_history(filename="history.txt", save_as="history_plot.png"):
-    """
-    Loads a file with one numeric value per row, plots it, and saves the plot.
-    """
-    # Load numeric values from file
     values = []
     with open(filename, "r") as f:
         for line in f:
@@ -527,52 +503,29 @@ def plot_history(filename="history.txt", save_as="history_plot.png"):
                     print(f"Skipping invalid line: {line}")
 
     if not values:
-        print("No valid data to plot.")
+        print("history data error")
         return
 
     # Create plot
     plt.figure()
     plt.plot(values)
 
-    plt.title("Loss History")
-    plt.xlabel("Iteration")
-    plt.ylabel("Loss")
     plt.yscale("log")
     plt.grid(True)
 
-    # Save plot
     plt.savefig(save_as)
     plt.close()
-
-
-# Speichern
-def save_model_state(model, filepath):
-    torch.save(model.state_dict(), filepath)
     pass
 
-# Laden
-def load_model_state(model_class, filepath, **model_kwargs):
-    model = model_class(**model_kwargs)
-    model.load_state_dict(torch.load(filepath))
-    return model
 
-def save_train_vals(iter, *values, filename="history.txt"):
-    mode = "w" if iter == 0 else "a"
-    line = ";".join(str(v) for v in values)
-    with open(filename, mode) as f:
-        f.write(line + "\n")
-    pass
-# ============================================================
-# 6. TRAINING LOOP (single batch with padded trajectories)
-# ============================================================
-
-# forward method
+# -------------------------------------------------
+#   this should be a forward class method
 def pad_forward_paths(torch_paths, forward):
     """
-    list_of_series: list of tensors with shapes (Ki, 2)
-    Returns:
-        padded: (Kmax, B, 2)
-        mask:   (Kmax, B)
+        list_of_series: list of tensors with (different) shapes (Ki, 2)
+        Returns:
+            padded: (Kmax, B, 2)
+            mask:   (Kmax, B)
     """
     B = len(torch_paths)
     lengths = [s.size(0) for s in torch_paths]
@@ -595,19 +548,17 @@ def pad_forward_paths(torch_paths, forward):
     return padded, mask
 
 
-
-
-class ForwardProcess():
-    def __init__(self, stepsize_h = 0.01):
+class ForwardProcess:
+    def __init__(self, stepsize_h=0.01):
         self.stepsize_h = stepsize_h
 
-        self.new_batch = -7 # TrueFalse
+        #self.new_batch = -7 # TrueFalse    # TODO - mmake active class attribute
         self.new_batch_iter = 500
 
-        self.batch_size = 100 #100 # 100 #450 # batch_size -- number of paths for interior
+        self.batch_size = 100 #450 # batch_size -- number of paths for interior
 
         self.samples_boundary = 10  # batch_size -- number of additional exit point via Euler Maruyama
-        self.samples_boundary_exact = self.batch_size * 200 // 2 # exact exit points -- uniformly drawn from domain boundary
+        self.samples_boundary_exact = self.batch_size * 200 // 2  # exact exit points -- !! this is just init !! -- gets set in pad_forward_paths depending on the sampled trajectories
 
         self.radius = 0.5
         self.center = (0.5, 0.5)
@@ -620,26 +571,20 @@ class ForwardProcess():
         self.mean_steps = 0
         self.max_steps = 0
 
-    #unused method -- delete
-    def set_sample_numbers(self, new_batch_size):
-        self.batch_size = new_batch_size
-        self.samples_boundary_exact = self.batch_size * 200 // 2
-        pass
-
-    # muss nicht von der Klasse
     def exact_solution(self, points):
         c1, c2 = self.center
         vals = self.f * (self.radius**2 - (points[:,0] - c1)**2 - (points[:,1] - c2)**2) / 2
         return vals
+
 
 if __name__ == "__main__":
 
     forward = ForwardProcess()
 
     # generate validation data
-    val_trajectories, val_exits = simulate_brownian_exit(10, 10, 0.001, forward.radius, forward.center)
-
+    val_trajectories, val_exits = simulate_brownian_exit(forward.batch_size, 10, forward.stepsize_h, forward.radius, forward.center)
     val_padded, val_mask = pad_forward_paths(val_trajectories, forward)
+
     print(f"[Validation Data 1] |  Batch Size: {forward.batch_size}   |   Steps Total: {forward.num_true}, Mean: {forward.mean_steps}, Max: {forward.max_steps}, Interior: {forward.num_interior}  |  Exact Boundary Points: {forward.samples_boundary_exact}")
 
     val_exact_exits = simulate_uniform_exit_points(50, forward.radius, forward.center)
@@ -662,20 +607,24 @@ if __name__ == "__main__":
     #
     #   init model
     model = TorchNet(in_dim=2, stepsize=forward.stepsize_h, width=20, depth=2)
-    #
-    print('Start Training')
-    #   quick training
-    trained_model = train_adam(model, forward, new_batch=True, lr_adam=1e-2, epochs_adam=[2000, 15000, 5000, 5000, 5000])
-    #   long training
-    #trained_model = train_adam(model, forward, new_batch=True, lr_adam=1e-2, epochs_adam=[4000, 100000, 100000, 50000, 50000])
+    train = False
+    if train:
+        print('Start Training')
+        #   quick training
+        trained_model = train_adam(model, forward, new_batch=True, lr_adam=1e-2, epochs_adam=[2000, 15000, 5000, 5000, 5000])
+        #   long training
+        #trained_model = train_adam(model, forward, new_batch=True, lr_adam=1e-2, epochs_adam=[4000, 100000, 100000, 50000, 50000])
+        save_model_state(trained_model, "output/net_adam_mini_batch.pth")
+        print('Training comlete; model saved')
+    else:
+        print('No training; just evaluation.')
 
-    save_model_state(trained_model, "output/net_adam_mini_batch.pth")
 
+    # load a model -- currently: load the one that was trained above!
+    # model_load = load_model_state(TorchNet, filepath="output/net_adam_mini_batch.pth", stepsize=forward.stepsize_h, width=20, depth=2)
 
-    # Office laptop --
-    #model_load = load_model_state(SinNet, filepath="output_torch_final_continued/sinnet_adam_new_patth.pth", stepsize=forward.stepsize_h, width=20, depth=2)
-    # MAC
-    model_load = load_model_state(TorchNet, filepath="output/net_adam_mini_batch.pth", stepsize=forward.stepsize_h, width=20, depth=2)
+    # diss data load
+    model_load = load_model_state(TorchNet, filepath="diss_used/output_torch_final_continued/sinnet_adam_new_patth.pth", stepsize=forward.stepsize_h, width=20, depth=2)    # XXX
 
     model_vals = model_load(plot_unstructured_coords).reshape(-1)
     model_grads = gradients(model_vals, plot_unstructured_coords)
@@ -691,7 +640,6 @@ if __name__ == "__main__":
 
 
     # New samples
-
     forward = ForwardProcess(stepsize_h=0.001)
 
     # generate validation data
@@ -714,15 +662,10 @@ if __name__ == "__main__":
     model_grad_norms = torch.norm(model_grads, dim=-1)
 
     plot_model(coords=plot_unstructured_coords, vals=model_vals, save_as='output/load_trained_model', title=None, vals_label=None)
-    #plot_model(coords=plot_unstructured_coords, vals=model_grad_norms, save_as='output_torch/load_trained_model_grads')
-    #
-    #
-    #
 
     paths = val_trajectories[0:3]
-    plot_model(paths, save_as='output/load_timelines_paths')
+    plot_model(paths, save_as='output/load_timelines_paths', title=None, vals_label=None)
 
     model_path_vals_list = [model_load(path) for path in paths]
     exact_path_vals_list = [forward.exact_solution(path) for path in paths]
-    plot_timelines(path_vals_list=model_path_vals_list, vals_exact=exact_path_vals_list, stepsize=forward.stepsize_h,
-                   save_as='output/load_timelines')
+    plot_timelines(path_vals_list=model_path_vals_list, vals_exact=exact_path_vals_list, stepsize=forward.stepsize_h, save_as='output/load_timelines')
