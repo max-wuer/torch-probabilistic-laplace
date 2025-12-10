@@ -590,7 +590,7 @@ if __name__ == "__main__":
     forward = ForwardProcess()
     model = TorchNet(in_dim=2, stepsize=forward.stepsize_h, width=20, depth=2)
 
-    train = False
+    train = True
     if train:
         print('Start Training')
         #   quick training
@@ -604,10 +604,10 @@ if __name__ == "__main__":
 
     # -------------------------------------------------
     #   Load a Model -- currently: load the one that was trained above!
-    # model_load = load_model_state(TorchNet, filepath="output/net_adam_mini_batch.pth", stepsize=forward.stepsize_h, width=20, depth=2)
+    model_load = load_model_state(TorchNet, filepath="output/net_adam_mini_batch.pth", stepsize=forward.stepsize_h, width=20, depth=2)
 
     # diss data load
-    model_load = load_model_state(TorchNet, filepath="diss_used/output_torch_final_continued/sinnet_adam_new_patth.pth", stepsize=forward.stepsize_h, width=20, depth=2)    # XXX
+    #model_load = load_model_state(TorchNet, filepath="diss_used/output_torch_final_continued/sinnet_adam_new_patth.pth", stepsize=forward.stepsize_h, width=20, depth=2)    # -- for diss XXX
 
     # -------------------------------------------------
     #   Evaluate and Plot
@@ -681,8 +681,8 @@ if __name__ == "__main__":
     paths = val_trajectories[0:3]
     plot_model(paths, save_as='output/load_timelines_paths', title=None, vals_label=None)
 
-    model_path_vals_list = [2 * model_load(path) for path in paths] #   +2 as above
+    model_path_vals_list = [2 * model_load(path) for path in paths]     #   *2 as above
     exact_path_vals_list = [forward.exact_solution(path) for path in paths]
     plot_timelines(model_vals=model_path_vals_list, vals_exact=exact_path_vals_list, stepsize=forward.stepsize_h, save_as='output/load_timelines')
 
-    plot_history(filename="diss_used/output_torch_final/history.txt", save_as="output/loss_history")
+    # plot_history(filename="diss_used/output_torch_final/history.txt", save_as="output/loss_history") -- XXX for diss !!
